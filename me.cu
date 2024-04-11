@@ -30,10 +30,10 @@ __device__ static void sad_block_8x8(uint8_t *block1, uint8_t *block2, int strid
 }
 
 /* Motion estimation for 8x8 block */
-__global__ static void me_block_8x8(struct c63_common *cm, struct macroblock **mb_gpu, int mb_x, int mb_y,
+__global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb_gpu, int mb_x, int mb_y,
     uint8_t *orig, uint8_t *ref, int color_component)
 {
-  struct macroblock *mb = &mb_gpu[color_component][mb_y*cm->padw[color_component]/8+mb_x];
+  struct macroblock *mb = &mb_gpu[mb_y*cm->padw[color_component]/8+mb_x];
 
   int range = cm->me_search_range;
 
@@ -60,34 +60,46 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock **m
 
   if (x < 0) return;
   if (y < 0) return;
-  if (x > w) return;
-  if (y > h) return;
+  if (x > w - 8) return;
+  if (y > h - 8) return;
 
   int mx = mb_x * 8;
   int my = mb_y * 8;
 
-  int best_sad = INT_MAX;
+  // Store all SADs in a flat array such that we can find the minimun SAD later
+  extern __shared__ int sad_array[];
 
   int sad;
-
   sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad);
+
+  // Store the SAD for this thread in the appropriate index in the array
+  int flattenedThreadIdx = threadIdx.y * blockDim.x + threadIdx.x;
+  sad_array[flattenedThreadIdx] = sad;
 
   __syncthreads();
 
-  if (sad < best_sad)
+  // Sequential addressing minimum algorithm
+  for(int stride = (blockDim.x*blockDim.y)/2; stride > 1; stride /= 2)
+  {
+    // Each iteration the amount of threads working will be halved since we compare 2 elements each iteration
+    if(flattenedThreadIdx < stride)
+    {
+      if(sad_array[flattenedThreadIdx] > sad_array[flattenedThreadIdx + stride])
+      {
+        sad_array[flattenedThreadIdx] = sad_array[flattenedThreadIdx + stride]; 
+      }
+    }
+
+    __syncthreads();
+  }
+
+  if (sad == sad_array[0])
   {
     mb->mv_x = x - mx;
     mb->mv_y = y - my;
-    best_sad = sad;
+    mb->use_mv = 1;
   }
 
-  /* Here, there should be a threshold on SAD that checks if the motion vector
-     is cheaper than intraprediction. We always assume MV to be beneficial */
-
-  /* printf("Using motion vector (%d, %d) with SAD %d\n", mb->mv_x, mb->mv_y,
-     best_sad); */
-
-  mb->use_mv = 1;
 }
 
 void c63_motion_estimate(struct c63_common *cm)
@@ -97,10 +109,20 @@ void c63_motion_estimate(struct c63_common *cm)
   struct macroblock **mb_gpu;
 
   cudaMalloc((void **)&cm_gpu, sizeof(struct c63_common));
-  cudaMalloc((void **)&mb_gpu, sizeof(struct macroblock)*COLOR_COMPONENTS);
+  cudaMalloc((void **)&mb_gpu, sizeof(void *)*COLOR_COMPONENTS);
+
+  cudaMalloc((void **)&mb_gpu[Y_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows)*(cm->mb_cols));
+  cudaMalloc((void **)&mb_gpu[U_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2));
+  cudaMalloc((void **)&mb_gpu[V_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2));
 
   cudaMemcpy(cm_gpu, cm, sizeof(struct c63_common), cudaMemcpyHostToDevice);
-  cudaMemcpy(mb_gpu, cm->curframe->mbs[0], sizeof(struct macroblock)*COLOR_COMPONENTS, cudaMemcpyHostToDevice);
+
+  cudaMemcpy(mb_gpu[Y_COMPONENT], cm->curframe->mbs[Y_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows)*(cm->mb_cols), cudaMemcpyHostToDevice);
+  cudaMemcpy(mb_gpu[U_COMPONENT], cm->curframe->mbs[U_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2), cudaMemcpyHostToDevice);
+  cudaMemcpy(mb_gpu[V_COMPONENT], cm->curframe->mbs[V_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2), cudaMemcpyHostToDevice);
+
+  // cudaMemcpy(&mb_gpu[Y_COMPONENT], cm->mb_rows * cm->mb_cols, sizeof(struct macroblock), cudaMemcpyHostToDevice);
+  
 
   printf("cm value: %p\n", (void*)mb_gpu);
 
@@ -122,9 +144,9 @@ void c63_motion_estimate(struct c63_common *cm)
   {
     for (mb_x = 0; mb_x < cm->mb_cols; ++mb_x)
     { 
-      me_block_8x8<<<1, threadsPerBlock>>>(cm_gpu, mb_gpu, mb_x, mb_y, orig_Y, ref_Y, Y_COMPONENT);
+      me_block_8x8<<<1, threadsPerBlock, threadsPerBlock.x*threadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_gpu[Y_COMPONENT], mb_x, mb_y, orig_Y, ref_Y, Y_COMPONENT);
 
-      // printf("%s\n", cudaGetErrorString(cudaGetLastError()));
+      printf("%s\n", cudaGetErrorString(cudaGetLastError()));
     }
   }
 
@@ -147,6 +169,9 @@ void c63_motion_estimate(struct c63_common *cm)
   cudaFree(ref_Y);
   cudaFree(cm_gpu);
   cudaFree(mb_gpu);
+  cudaFree(mb_gpu[Y_COMPONENT]);
+  cudaFree(mb_gpu[U_COMPONENT]);
+  cudaFree(mb_gpu[V_COMPONENT]);
 }
 
 /* Motion compensation for 8x8 block */
