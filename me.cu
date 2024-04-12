@@ -99,7 +99,7 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
     // Each iteration the amount of threads working will be halved since we compare 2 elements each iteration
     if(flattenedThreadIdx < stride)
     {
-      if(sad_array[flattenedThreadIdx] < sad_array[flattenedThreadIdx + stride])
+      if(sad_array[flattenedThreadIdx] > sad_array[flattenedThreadIdx + stride])
       {
         sad_array[flattenedThreadIdx] = sad_array[flattenedThreadIdx + stride];
         // printf("sad_array[%d] = %d\n", flattenedThreadIdx, sad_array[flattenedThreadIdx])
