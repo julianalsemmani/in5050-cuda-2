@@ -44,39 +44,65 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   int w = cm->padw[color_component];
   int h = cm->padh[color_component];
 
-
   int x = mb_x * 8 + threadIdx.x - range;
   int y = mb_y * 8 + threadIdx.y - range;
 
-  if (x < 0) return;
-  if (y < 0) return;
-  if (x > w - 8) return;
-  if (y > h - 8) return;
-
-  int mx = mb_x * 8;
-  int my = mb_y * 8;
-
+  // if (x < 0) return;
+  // if (y < 0) return;
+  // if (x > w - 8) return;
+  // if (y > h - 8) return;
   // Store all SADs in a flat array such that we can find the minimun SAD later
   extern __shared__ int sad_array[];
-
-  int sad;
-  sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad);
-
-  // Store the SAD for this thread in the appropriate index in the array
   int flattenedThreadIdx = threadIdx.y * blockDim.x + threadIdx.x;
-  sad_array[flattenedThreadIdx] = sad;
+  
+  int mx = mb_x * 8;
+  int my = mb_y * 8;
+  int sad;
+
+  if (x < 0 || y < 0 || x > w - 8 || y > h - 8) {
+    // if (x < 0) {
+    //   printf("x true - %d\n", x);
+    // } else if (y < 0) {
+    //   printf("y true - %d\n", y);
+    // } else if (x > w - 8) {
+    //   printf("x w true - %d - %d\n", x, w);
+    // } else if (y > h - 8) {
+    //   printf("y h true - %d - %d\n", y, h);
+    // } 
+    sad_array[flattenedThreadIdx] = INT_MAX;
+    return;
+  } else {
+    sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad);
+
+    // Store the SAD for this thread in the appropriate index in the array
+    sad_array[flattenedThreadIdx] = sad;
+  }
 
   __syncthreads();
 
   // Sequential addressing minimum algorithm
   for(int stride = (blockDim.x*blockDim.y)/2; stride > 1; stride /= 2)
   {
+    // Gives out right values
+    if(x == mx && y == my && blockIdx.x == 0 && blockIdx.y == 0)
+    {
+      for (int i = 0; i < (blockDim.x*blockDim.y); i++)
+      {
+        printf("%d ", sad_array[i]);
+      }  
+      printf("\n");
+      printf("stride: %d - arraysize: %d - index %d \n", stride, blockDim.x * blockDim.y, flattenedThreadIdx);
+    }
+
+    __syncthreads();
+    // Gives out way too high values
     // Each iteration the amount of threads working will be halved since we compare 2 elements each iteration
     if(flattenedThreadIdx < stride)
     {
-      if(sad_array[flattenedThreadIdx] > sad_array[flattenedThreadIdx + stride])
+      if(sad_array[flattenedThreadIdx] < sad_array[flattenedThreadIdx + stride])
       {
         sad_array[flattenedThreadIdx] = sad_array[flattenedThreadIdx + stride];
+        // printf("sad_array[%d] = %d\n", flattenedThreadIdx, sad_array[flattenedThreadIdx])
       }
     }
 
@@ -88,6 +114,8 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
     mb->mv_x = x - mx;
     mb->mv_y = y - my;
     mb->use_mv = 1;
+
+    // printf("x,y (%d, %d) - MV: (%d, %d) - sad: (%d)\n", x, y, mb->mv_x, mb->mv_y, sad);
   }
 
 }
@@ -131,13 +159,13 @@ void c63_motion_estimate(struct c63_common *cm)
   cudaMemcpy(recons_V, cm->curframe->recons->V, sizeof(uint8_t)*cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT], cudaMemcpyHostToDevice);
 
   dim3 lumaThreadsPerBlock(cm->me_search_range*2, cm->me_search_range*2);
-  dim3 lumaGridDim(cm->mb_rows, cm->mb_cols);
+  dim3 lumaGridDim(cm->mb_cols ,cm->mb_rows);
 
   /* Luma */
   me_block_8x8<<<lumaGridDim, lumaThreadsPerBlock, lumaThreadsPerBlock.x*lumaThreadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_Y, orig_Y, recons_Y, Y_COMPONENT);
 
   dim3 chromaThreadsPerBlock(cm->me_search_range, cm->me_search_range);
-  dim3 chromaGridDim(cm->mb_rows/2, cm->mb_cols/2);
+  dim3 chromaGridDim(cm->mb_cols/2, cm->mb_rows/2);
 
   /* Chroma */
   me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_U, orig_U, recons_U, U_COMPONENT);
