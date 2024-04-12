@@ -60,17 +60,7 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   int sad;
 
   if (x < 0 || y < 0 || x > w - 8 || y > h - 8) {
-    // if (x < 0) {
-    //   printf("x true - %d\n", x);
-    // } else if (y < 0) {
-    //   printf("y true - %d\n", y);
-    // } else if (x > w - 8) {
-    //   printf("x w true - %d - %d\n", x, w);
-    // } else if (y > h - 8) {
-    //   printf("y h true - %d - %d\n", y, h);
-    // } 
     sad_array[flattenedThreadIdx] = INT_MAX;
-    return;
   } else {
     sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad);
 
@@ -84,17 +74,17 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   for(int stride = (blockDim.x*blockDim.y)/2; stride > 1; stride /= 2)
   {
     // Gives out right values
-    if(x == mx && y == my && blockIdx.x == 0 && blockIdx.y == 0)
-    {
-      for (int i = 0; i < (blockDim.x*blockDim.y); i++)
-      {
-        printf("%d ", sad_array[i]);
-      }  
-      printf("\n");
-      printf("stride: %d - arraysize: %d - index %d \n", stride, blockDim.x * blockDim.y, flattenedThreadIdx);
-    }
+    // if(x == mx && y == my && blockIdx.x == 0 && blockIdx.y == 0)
+    // {
+    //   for (int i = 0; i < (blockDim.x*blockDim.y); i++)
+    //   {
+    //     printf("%d ", sad_array[i]);
+    //   }  
+    //   printf("\n");
+    //   printf("stride: %d - arraysize: %d - index %d \n", stride, blockDim.x * blockDim.y, flattenedThreadIdx);
+    // }
 
-    __syncthreads();
+    // __syncthreads();
     // Gives out way too high values
     // Each iteration the amount of threads working will be halved since we compare 2 elements each iteration
     if(flattenedThreadIdx < stride)
