@@ -110,8 +110,6 @@ void c63_motion_estimate(struct c63_common *cm)
   cudaMemcpy(mb_U, cm->curframe->mbs[U_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2), cudaMemcpyHostToDevice);
   cudaMemcpy(mb_V, cm->curframe->mbs[V_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2), cudaMemcpyHostToDevice);
 
-
-  int mb_x, mb_y;
   uint8_t *orig_Y, *recons_Y;
   cudaMalloc((void **)&orig_Y, sizeof(uint8_t)*cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT]);
   cudaMalloc((void **)&recons_Y, sizeof(uint8_t)*cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT]);
@@ -124,7 +122,6 @@ void c63_motion_estimate(struct c63_common *cm)
   cudaMalloc((void **)&orig_V, sizeof(uint8_t)*cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT]);
   cudaMalloc((void **)&recons_V, sizeof(uint8_t)*cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT]);
   printf("%s\n", cudaGetErrorString(cudaGetLastError()));
-
 
   cudaMemcpy(orig_Y, cm->curframe->orig->Y, sizeof(uint8_t)*cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT], cudaMemcpyHostToDevice);
   cudaMemcpy(orig_U, cm->curframe->orig->U, sizeof(uint8_t)*cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT], cudaMemcpyHostToDevice);
@@ -139,17 +136,18 @@ void c63_motion_estimate(struct c63_common *cm)
   /* Luma */
   me_block_8x8<<<lumaGridDim, lumaThreadsPerBlock, lumaThreadsPerBlock.x*lumaThreadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_Y, orig_Y, recons_Y, Y_COMPONENT);
 
-
   dim3 chromaThreadsPerBlock(cm->me_search_range, cm->me_search_range);
   dim3 chromaGridDim(cm->mb_rows/2, cm->mb_cols/2);
 
   /* Chroma */
-
   me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_U, orig_U, recons_U, U_COMPONENT);
   me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_V, orig_V, recons_V, V_COMPONENT);
 
-
   cudaDeviceSynchronize();
+
+  cudaMemcpy(cm->curframe->mbs[Y_COMPONENT], mb_Y, sizeof(struct macroblock)*(cm->mb_rows)*(cm->mb_cols), cudaMemcpyDeviceToHost);
+  cudaMemcpy(cm->curframe->mbs[U_COMPONENT], mb_U, sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2), cudaMemcpyDeviceToHost);
+  cudaMemcpy(cm->curframe->mbs[V_COMPONENT], mb_V, sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2), cudaMemcpyDeviceToHost);
 
   cudaFree(orig_Y);
   cudaFree(recons_Y);
