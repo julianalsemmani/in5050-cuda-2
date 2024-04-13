@@ -53,11 +53,17 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   // if (y > h - 8) return;
   // Store all SADs in a flat array such that we can find the minimun SAD later
   extern __shared__ int sad_array[];
+  extern __shared__ int mv_x_array[];
+  extern __shared__ int mv_y_array[];
+  
   int flattenedThreadIdx = threadIdx.y * blockDim.x + threadIdx.x;
   
   int mx = mb_x * 8;
   int my = mb_y * 8;
   int sad;
+
+  mv_x_array[flattenedThreadIdx] = x - mx;
+  mv_y_array[flattenedThreadIdx] = y - my;
 
   if (x < 0 || y < 0 || x > w - 8 || y > h - 8) {
     sad_array[flattenedThreadIdx] = INT_MAX;
@@ -92,6 +98,8 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
       if(sad_array[flattenedThreadIdx] > sad_array[flattenedThreadIdx + stride])
       {
         sad_array[flattenedThreadIdx] = sad_array[flattenedThreadIdx + stride];
+        mv_x_array[flattenedThreadIdx] = mv_x_array[flattenedThreadIdx + stride];
+        mv_y_array[flattenedThreadIdx] = mv_y_array[flattenedThreadIdx + stride];
         // printf("sad_array[%d] = %d\n", flattenedThreadIdx, sad_array[flattenedThreadIdx])
       }
     }
@@ -99,10 +107,11 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
     __syncthreads();
   }
 
-  if (sad == sad_array[0])
+  if (threadIdx.x == 0 && threadIdx.y == 0)
   {
-    mb->mv_x = x - mx;
-    mb->mv_y = y - my;
+    // printf("x,y (%d, %d)\n", blockIdx.x, blockIdx.y);
+    mb->mv_x = mv_x_array[0];
+    mb->mv_y = mv_y_array[0];
     mb->use_mv = 1;
 
     // printf("x,y (%d, %d) - MV: (%d, %d) - sad: (%d)\n", x, y, mb->mv_x, mb->mv_y, sad);
@@ -152,14 +161,14 @@ void c63_motion_estimate(struct c63_common *cm)
   dim3 lumaGridDim(cm->mb_cols ,cm->mb_rows);
 
   /* Luma */
-  me_block_8x8<<<lumaGridDim, lumaThreadsPerBlock, lumaThreadsPerBlock.x*lumaThreadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_Y, orig_Y, recons_Y, Y_COMPONENT);
+  me_block_8x8<<<lumaGridDim, lumaThreadsPerBlock, lumaThreadsPerBlock.x*lumaThreadsPerBlock.y*sizeof(int)*3>>>(cm_gpu, mb_Y, orig_Y, recons_Y, Y_COMPONENT);
 
   dim3 chromaThreadsPerBlock(cm->me_search_range, cm->me_search_range);
   dim3 chromaGridDim(cm->mb_cols/2, cm->mb_rows/2);
 
   /* Chroma */
-  me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_U, orig_U, recons_U, U_COMPONENT);
-  me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)>>>(cm_gpu, mb_V, orig_V, recons_V, V_COMPONENT);
+  me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)*3>>>(cm_gpu, mb_U, orig_U, recons_U, U_COMPONENT);
+  me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)*3>>>(cm_gpu, mb_V, orig_V, recons_V, V_COMPONENT);
 
   cudaDeviceSynchronize();
 
