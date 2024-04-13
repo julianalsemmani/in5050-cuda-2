@@ -158,7 +158,7 @@ static void quantize_block(float *in_data, float *out_data, uint8_t *quant_tbl)
 
 __device__ static void quantize_block_cu(float *in_data, float *out_data, uint8_t *quant_tbl, int i, int j)
 {
-  int zigzag = j*8+1;
+  int zigzag = j*8+i;
   
   uint8_t u = zigzag_U_d[zigzag];
   uint8_t v = zigzag_V_d[zigzag];
@@ -202,20 +202,34 @@ __global__ static void dct_quant_block_8x8(int16_t *in_data, int16_t *out_data, 
   mb2[j*8+i] = in_data[j*8+i];
 
   __syncthreads();
-  /* Two 1D DCT operations with transpose */
 
-  dct_1d(mb2+j*8, mb+j*8, i, j); 
+  if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
+    for (int i = 0; i < 8; i++) {
+      for (int j = 0; j < 8; j++) {
+        printf("%f,", mb2[i]);
+      }
+      printf("\n");
+    }
+  }
 
   __syncthreads();
+  /* Two 1D DCT operations with transpose */
+
+  for (int x = 0; x < 8; x++) {
+    dct_1d(mb2+x*8, mb+x*8, i, j); 
+    __syncthreads();
+  }
 
   transpose_block_cu(mb, mb2, i, j);
 
   __syncthreads();
 
   // < 8
-  dct_1d(mb2+j*8, mb+j*8, i, j); 
+  for (int x = 0; x < 8; x++) {
+    dct_1d(mb2+x*8, mb+x*8, i, j); 
+    __syncthreads();
+  }
 
-  __syncthreads();
 
   transpose_block_cu(mb, mb2, i, j);
 
