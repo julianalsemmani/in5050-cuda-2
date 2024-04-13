@@ -14,6 +14,13 @@
 #include "me.h"
 #include "tables.h"
 
+struct mv_data
+{
+  int sad;
+  int mv_x;
+  int mv_y;
+};
+
 __device__ static void sad_block_8x8(uint8_t *block1, uint8_t *block2, int stride, int *result)
 {
   int u, v;
@@ -52,9 +59,7 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   // if (x > w - 8) return;
   // if (y > h - 8) return;
   // Store all SADs in a flat array such that we can find the minimun SAD later
-  extern __shared__ int sad_array[];
-  extern __shared__ int mv_x_array[];
-  extern __shared__ int mv_y_array[];
+  extern __shared__ struct mv_data sad_array[];
   
   int flattenedThreadIdx = threadIdx.y * blockDim.x + threadIdx.x;
   
@@ -62,16 +67,16 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   int my = mb_y * 8;
   int sad;
 
-  mv_x_array[flattenedThreadIdx] = x - mx;
-  mv_y_array[flattenedThreadIdx] = y - my;
+  sad_array[flattenedThreadIdx].mv_x = x - mx;
+  sad_array[flattenedThreadIdx].mv_y = y - my;
 
   if (x < 0 || y < 0 || x > w - 8 || y > h - 8) {
-    sad_array[flattenedThreadIdx] = INT_MAX;
+    sad_array[flattenedThreadIdx].sad = INT_MAX;
   } else {
     sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad);
 
     // Store the SAD for this thread in the appropriate index in the array
-    sad_array[flattenedThreadIdx] = sad;
+    sad_array[flattenedThreadIdx].sad = sad;
   }
 
   __syncthreads();
@@ -82,12 +87,12 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
     // Gives out right values
     // if(x == mx && y == my && blockIdx.x == 0 && blockIdx.y == 0)
     // {
-    //   for (int i = 0; i < (blockDim.x*blockDim.y); i++)
+    //   for (int i = 0; i < 16; i++)
     //   {
-    //     printf("%d ", sad_array[i]);
+    //     printf("%d ", sad_array[i].sad);
     //   }  
     //   printf("\n");
-    //   printf("stride: %d - arraysize: %d - index %d \n", stride, blockDim.x * blockDim.y, flattenedThreadIdx);
+    //   printf("stride: %d - arraysize: %d - index %d \n - mv_x %d - mv_y %d", stride, blockDim.x * blockDim.y, flattenedThreadIdx, sad_array[0].mv_x, sad_array[0].mv_y);
     // }
 
     // __syncthreads();
@@ -95,11 +100,9 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
     // Each iteration the amount of threads working will be halved since we compare 2 elements each iteration
     if(flattenedThreadIdx < stride)
     {
-      if(sad_array[flattenedThreadIdx] > sad_array[flattenedThreadIdx + stride])
+      if(sad_array[flattenedThreadIdx].sad > sad_array[flattenedThreadIdx + stride].sad)
       {
         sad_array[flattenedThreadIdx] = sad_array[flattenedThreadIdx + stride];
-        mv_x_array[flattenedThreadIdx] = mv_x_array[flattenedThreadIdx + stride];
-        mv_y_array[flattenedThreadIdx] = mv_y_array[flattenedThreadIdx + stride];
         // printf("sad_array[%d] = %d\n", flattenedThreadIdx, sad_array[flattenedThreadIdx])
       }
     }
@@ -110,13 +113,12 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   if (threadIdx.x == 0 && threadIdx.y == 0)
   {
     // printf("x,y (%d, %d)\n", blockIdx.x, blockIdx.y);
-    mb->mv_x = mv_x_array[0];
-    mb->mv_y = mv_y_array[0];
+    mb->mv_x = sad_array[0].mv_x;
+    mb->mv_y = sad_array[0].mv_y;
     mb->use_mv = 1;
 
-    // printf("x,y (%d, %d) - MV: (%d, %d) - sad: (%d)\n", x, y, mb->mv_x, mb->mv_y, sad);
+    // printf("x,y (%d, %d) - MV: (%d, %d) - sad: (%d)\n", x, y, mv_x_array[0], mv_y_array[0], sad_array[0]);
   }
-
 }
 
 void c63_motion_estimate(struct c63_common *cm)
