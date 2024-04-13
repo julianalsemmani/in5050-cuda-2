@@ -65,17 +65,9 @@ __constant__ float dctlookup_d[8][8] =
   {1.0f, -0.980785f,  0.923880f, -0.831470f,  0.707107f, -0.555570f,  0.382683f, -0.195090f, },
 };
 
-__device__ static void transpose_block_cu(float *in_data, float *out_data)
+__device__ static void transpose_block_cu(float *in_data, float *out_data, int i, int j)
 {
-  int i, j;
-
-  for (i = 0; i < 8; ++i)
-  {
-    for (j = 0; j < 8; ++j)
-    {
-      out_data[i*8+j] = in_data[j*8+i];
-    }
-  }
+  out_data[i*8+j] = in_data[j*8+i];
 }
 
 static void transpose_block(float *in_data, float *out_data)
@@ -91,21 +83,16 @@ static void transpose_block(float *in_data, float *out_data)
   }
 }
 
-__device__ static void dct_1d(float *in_data, float *out_data)
+__device__ static void dct_1d(float *in_data, float *out_data, int i, int j)
 {
-  int i, j;
+  __shared__ float dct[8];
 
-  for (i = 0; i < 8; ++i)
-  {
-    float dct = 0;
+  // dct[i] += in_data[j] * dctlookup_d[j][i];
+  atomicAdd(&dct[i], in_data[j] * dctlookup_d[j][i]);
 
-    for (j = 0; j < 8; ++j)
-    {
-      dct += in_data[j] * dctlookup_d[j][i];
-    }
+  __syncthreads();
 
-    out_data[i] = dct;
-  }
+  out_data[i] = dct[i];
 }
 
 static void idct_1d(float *in_data, float *out_data)
@@ -143,21 +130,13 @@ static void scale_block(float *in_data, float *out_data)
 }
 
 
-__device__ static void scale_block_cu(float *in_data, float *out_data)
+__device__ static void scale_block_cu(float *in_data, float *out_data, int u, int v)
 {
-  int u, v;
+  float a1 = !u ? ISQRT2 : 1.0f;
+  float a2 = !v ? ISQRT2 : 1.0f;
 
-  for (v = 0; v < 8; ++v)
-  {
-    for (u = 0; u < 8; ++u)
-    {
-      float a1 = !u ? ISQRT2 : 1.0f;
-      float a2 = !v ? ISQRT2 : 1.0f;
-
-      /* Scale according to normalizing function */
-      out_data[v*8+u] = in_data[v*8+u] * a1 * a2;
-    }
-  }
+  /* Scale according to normalizing function */
+  out_data[v*8+u] = in_data[v*8+u] * a1 * a2;
 }
 
 
@@ -177,20 +156,17 @@ static void quantize_block(float *in_data, float *out_data, uint8_t *quant_tbl)
   }
 }
 
-__device__ static void quantize_block_cu(float *in_data, float *out_data, uint8_t *quant_tbl)
+__device__ static void quantize_block_cu(float *in_data, float *out_data, uint8_t *quant_tbl, int i, int j)
 {
-  int zigzag;
+  int zigzag = j*8+1;
+  
+  uint8_t u = zigzag_U_d[zigzag];
+  uint8_t v = zigzag_V_d[zigzag];
 
-  for (zigzag = 0; zigzag < 64; ++zigzag)
-  {
-    uint8_t u = zigzag_U_d[zigzag];
-    uint8_t v = zigzag_V_d[zigzag];
+  float dct = in_data[v*8+u];
 
-    float dct = in_data[v*8+u];
-
-    /* Zig-zag and quantize */
-    out_data[zigzag] = (float) round((dct / 4.0) / quant_tbl[zigzag]);
-  }
+  /* Zig-zag and quantize */
+  out_data[zigzag] = (float) round((dct / 4.0) / quant_tbl[zigzag]);
 }
 
 
@@ -220,41 +196,41 @@ __global__ static void dct_quant_block_8x8(int16_t *in_data, int16_t *out_data, 
   __shared__ float mb2[8*8] __attribute((aligned(16)));
 
   int i = threadIdx.x;
-  int v = threadIdx.y;
+  int j = threadIdx.y;
 
   // < 64
-  mb2[i] = in_data[i];
+  mb2[j*8+i] = in_data[j*8+i];
 
   __syncthreads();
   /* Two 1D DCT operations with transpose */
 
-  dct_1d(mb2+v*8, mb+v*8); 
+  dct_1d(mb2+j*8, mb+j*8, i, j); 
 
   __syncthreads();
 
-  transpose_block_cu(mb, mb2);
+  transpose_block_cu(mb, mb2, i, j);
 
   __syncthreads();
 
   // < 8
-  dct_1d(mb2+v*8, mb+v*8); 
+  dct_1d(mb2+j*8, mb+j*8, i, j); 
 
   __syncthreads();
 
-  transpose_block_cu(mb, mb2);
+  transpose_block_cu(mb, mb2, i, j);
 
   __syncthreads();
 
-  scale_block_cu(mb2, mb);
+  scale_block_cu(mb2, mb, i, j);
 
   __syncthreads();
 
-  quantize_block_cu(mb, mb2, quant_tbl);
+  quantize_block_cu(mb, mb2, quant_tbl, i, j);
 
   __syncthreads();
 
   // < 64
-  out_data[i] = mb2[i]; 
+  out_data[j*8+i] = mb2[j*8+i]; 
 }
 
 static void dequant_idct_block_8x8(int16_t *in_data, int16_t *out_data,
@@ -317,7 +293,7 @@ static void dct_quantize_row(uint8_t *in_data, uint8_t *prediction, int w, int h
 
   int16_t block[(w/8)*(8*8)];
 
-  int16_t block_d[(w/8)*(8*8)];
+  int16_t *block_d;
 
   cudaMalloc((void **)&block_d, sizeof(int16_t)*(w/8)*(8*8));
 
@@ -339,7 +315,7 @@ static void dct_quantize_row(uint8_t *in_data, uint8_t *prediction, int w, int h
 
   cudaMemcpy(block_d, block, sizeof(int16_t)*(w/8)*(8*8), cudaMemcpyHostToDevice);
 
-  dim3 blockDim(64, 8);
+  dim3 blockDim(8, 8);
 
   /* Store MBs linear in memory, i.e. the 64 coefficients are stored
     continous. This allows us to ignore stride in DCT/iDCT and other
@@ -363,17 +339,21 @@ void dequantize_idct(int16_t *in_data, uint8_t *prediction, uint32_t width,
   }
 }
 
-void dct_quantize(uint8_t *in_data, uint8_t *prediction, uint32_t width,
-    uint32_t height, int16_t *out_data, uint8_t *quantization)
+void dct_quantize(uint8_t *in_data, uint8_t *prediction, uint32_t width, uint32_t height, int16_t *out_data, uint8_t *quantization)
 {
   int y;
   uint8_t *quantization_d;
+  // , *in_data_d, *prediction_d;
   int16_t *out_data_d;
 
   cudaMalloc((void **)&quantization_d, sizeof(uint8_t)*width*height);
+  // cudaMalloc((void **)&in_data_d, sizeof(uint8_t)*width*height);
+  // cudaMalloc((void **)&prediction_d, sizeof(uint8_t)*width*height);
   cudaMalloc((void **)&out_data_d, sizeof(int16_t)*width*height);
 
   cudaMemcpy(quantization_d, quantization, sizeof(uint8_t)*width*height, cudaMemcpyHostToDevice);
+  // cudaMemcpy(in_data_d, in_data, sizeof(uint8_t)*width*height, cudaMemcpyHostToDevice);
+  // cudaMemcpy(prediction_d, prediction, sizeof(uint8_t)*width*height, cudaMemcpyHostToDevice);
   cudaMemcpy(out_data_d, out_data, sizeof(int16_t)*width*height, cudaMemcpyHostToDevice);
 
   for (y = 0; y < height; y += 8)
@@ -385,5 +365,7 @@ void dct_quantize(uint8_t *in_data, uint8_t *prediction, uint32_t width,
 
   cudaFree(quantization_d);
   cudaFree(out_data_d);
+  // cudaFree(in_data_d);
+  // cudaFree(prediction_d);
 }
 
