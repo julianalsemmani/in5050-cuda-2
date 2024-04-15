@@ -67,7 +67,7 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   if (right > (w - 8)) { right = w - 8; }
   if (bottom > (h - 8)) { bottom = h - 8; }
 
-  int x, y;
+  int x = 5, y = 5;
 
   int mx = mb_x * 8;
   int my = mb_y * 8;
@@ -75,12 +75,15 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   int best_sad = INT_MAX;
   __shared__ int sad;
 
+        // printf("%d, %d, %d, %d \n", x, y, *(orig+y*w+x));
+  // printf("%d, %d, %d, %d \n", *(orig), y, w, x);
+
   for (y = top; y < bottom; ++y)
   {
     for (x = left; x < right; ++x)
     {
       sad = 0;
-
+      
       __syncthreads();
 
       sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad, threadIdx.x, threadIdx.y);
@@ -95,9 +98,9 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
       }
     }
   }
-  if (threadIdx.x == 0 && threadIdx.y == 0) {
-    printf("(%4d, %4d) - %d - %d - %d\n", mx, my, best_sad, mb->mv_x, mb->mv_y);
-  }
+  // if (threadIdx.x == 0 && threadIdx.y == 0) {
+  //   printf("(%4d, %4d) - %d - %d - %d\n", mx, my, best_sad, mb->mv_x, mb->mv_y);
+  // }
 
 
   /* Here, there should be a threshold on SAD that checks if the motion vector
@@ -130,24 +133,24 @@ void c63_motion_estimate(struct c63_common *cm)
   cudaMemcpy(mb_V, cm->curframe->mbs[V_COMPONENT], sizeof(struct macroblock)*(cm->mb_rows/2)*(cm->mb_cols/2), cudaMemcpyHostToDevice);
 
   uint8_t *orig_Y, *recons_Y;
-  cudaMalloc((void **)&orig_Y, sizeof(uint8_t)*cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT]);
-  cudaMalloc((void **)&recons_Y, sizeof(uint8_t)*cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT]);
+  cudaMalloc((void **)&orig_Y, sizeof(uint8_t)*cm->ypw*cm->yph);
+  cudaMalloc((void **)&recons_Y, sizeof(uint8_t)*cm->ypw*cm->yph);
 
   uint8_t *orig_U, *recons_U;
-  cudaMalloc((void **)&orig_U, sizeof(uint8_t)*cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT]);
-  cudaMalloc((void **)&recons_U, sizeof(uint8_t)*cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT]);
+  cudaMalloc((void **)&orig_U, sizeof(uint8_t)*cm->upw*cm->uph);
+  cudaMalloc((void **)&recons_U, sizeof(uint8_t)*cm->upw*cm->uph);
 
   uint8_t *orig_V, *recons_V;
-  cudaMalloc((void **)&orig_V, sizeof(uint8_t)*cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT]);
-  cudaMalloc((void **)&recons_V, sizeof(uint8_t)*cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT]);
+  cudaMalloc((void **)&orig_V, sizeof(uint8_t)*cm->vpw*cm->vph);
+  cudaMalloc((void **)&recons_V, sizeof(uint8_t)*cm->vpw*cm->vph);
   printf("%s\n", cudaGetErrorString(cudaGetLastError()));
 
-  cudaMemcpy(orig_Y, cm->curframe->orig->Y, sizeof(uint8_t)*cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT], cudaMemcpyHostToDevice);
-  cudaMemcpy(orig_U, cm->curframe->orig->U, sizeof(uint8_t)*cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT], cudaMemcpyHostToDevice);
-  cudaMemcpy(orig_V, cm->curframe->orig->V, sizeof(uint8_t)*cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT], cudaMemcpyHostToDevice);
-  cudaMemcpy(recons_Y, cm->curframe->recons->Y, sizeof(uint8_t)*cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT], cudaMemcpyHostToDevice);
-  cudaMemcpy(recons_U, cm->curframe->recons->U, sizeof(uint8_t)*cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT], cudaMemcpyHostToDevice);
-  cudaMemcpy(recons_V, cm->curframe->recons->V, sizeof(uint8_t)*cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT], cudaMemcpyHostToDevice);
+  cudaMemcpy(orig_Y, cm->curframe->orig->Y, sizeof(uint8_t)*cm->ypw*cm->yph, cudaMemcpyHostToDevice);
+  cudaMemcpy(orig_U, cm->curframe->orig->U, sizeof(uint8_t)*cm->upw*cm->uph, cudaMemcpyHostToDevice);
+  cudaMemcpy(orig_V, cm->curframe->orig->V, sizeof(uint8_t)*cm->vpw*cm->vph, cudaMemcpyHostToDevice);
+  cudaMemcpy(recons_Y, cm->curframe->recons->Y, sizeof(uint8_t)*cm->ypw*cm->yph, cudaMemcpyHostToDevice);
+  cudaMemcpy(recons_U, cm->curframe->recons->U, sizeof(uint8_t)*cm->upw*cm->uph, cudaMemcpyHostToDevice);
+  cudaMemcpy(recons_V, cm->curframe->recons->V, sizeof(uint8_t)*cm->vpw*cm->vph, cudaMemcpyHostToDevice);
 
   dim3 gridDim(cm->mb_cols, cm->mb_rows);
   dim3 blockDim(8, 8);
