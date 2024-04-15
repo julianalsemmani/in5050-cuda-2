@@ -23,8 +23,20 @@ struct mv_data
 
 __device__ static void sad_block_8x8(uint8_t *block1, uint8_t *block2, int stride, int *result, int u, int v)
 {
+  // *result = 0;
+
+  // for (v = 0; v < 8; ++v)
+  // {
+  //   for (u = 0; u < 8; ++u)
+  //   {
+  //     *result += abs(block2[v*stride+u] - block1[v*stride+u]);
+  //   }
+  // }
+
   int difference = abs(block2[v * stride + u] - block1[v * stride + u]);
   atomicAdd(result, difference);
+
+  __syncthreads();
 }
 
 /* Motion estimation for 8x8 block */
@@ -61,12 +73,12 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   int my = mb_y * 8;
 
   int best_sad = INT_MAX;
+  __shared__ int sad;
 
   for (y = top; y < bottom; ++y)
   {
     for (x = left; x < right; ++x)
     {
-      __shared__ int sad;
       sad = 0;
 
       __syncthreads();
@@ -83,6 +95,10 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
       }
     }
   }
+  if (threadIdx.x == 0 && threadIdx.y == 0) {
+    printf("(%4d, %4d) - %d - %d - %d\n", mx, my, best_sad, mb->mv_x, mb->mv_y);
+  }
+
 
   /* Here, there should be a threshold on SAD that checks if the motion vector
      is cheaper than intraprediction. We always assume MV to be beneficial */
