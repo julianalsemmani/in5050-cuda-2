@@ -91,7 +91,7 @@ __device__ static void dct_1d(float *in_data, float *out_data, int i)
   for (int j = 0; j < 8; ++j)
   {
     dct += in_data[j] * dctlookup_d[j][i];
-    printf("dct: %f - in_data: %f - lookup: %f\n", dct, in_data[j], dctlookup_d[j][i]);
+    // printf("dct: %f - in_data: %f - lookup: %f\n", dct, in_data[j], dctlookup_d[j][i]);
   }
 
   out_data[i] = dct;
