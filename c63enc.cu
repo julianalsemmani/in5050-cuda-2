@@ -105,16 +105,13 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
   }
 
   /* DCT and Quantization */
-  dct_quantize(image->Y, cm->curframe->predicted->Y, cm->padw[Y_COMPONENT],
-      cm->padh[Y_COMPONENT], cm->curframe->residuals->Ydct,
+  dct_quantize(image->Y, cm->curframe->predicted->Y, cm->padw[Y_COMPONENT], cm->padh[Y_COMPONENT], cm->ypw, cm->yph, cm->curframe->residuals->Ydct,
       cm->quanttbl[Y_COMPONENT]);
 
-  dct_quantize(image->U, cm->curframe->predicted->U, cm->padw[U_COMPONENT],
-      cm->padh[U_COMPONENT], cm->curframe->residuals->Udct,
+  dct_quantize(image->U, cm->curframe->predicted->U, cm->padw[U_COMPONENT], cm->padh[U_COMPONENT], cm->upw, cm->uph, cm->curframe->residuals->Udct,
       cm->quanttbl[U_COMPONENT]);
 
-  dct_quantize(image->V, cm->curframe->predicted->V, cm->padw[V_COMPONENT],
-      cm->padh[V_COMPONENT], cm->curframe->residuals->Vdct,
+  dct_quantize(image->V, cm->curframe->predicted->V, cm->padw[V_COMPONENT], cm->padh[V_COMPONENT], cm->vpw, cm->vph, cm->curframe->residuals->Vdct,
       cm->quanttbl[V_COMPONENT]);
 
   /* Reconstruct frame for inter-prediction */

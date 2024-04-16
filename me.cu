@@ -21,22 +21,19 @@ struct mv_data
   int mv_y;
 };
 
-__device__ static void sad_block_8x8(uint8_t *block1, uint8_t *block2, int stride, int *result, int u, int v)
+__device__ static void sad_block_8x8(uint8_t *block1, uint8_t *block2, int stride, int *result)
 {
-  // *result = 0;
+  int u, v;
 
-  // for (v = 0; v < 8; ++v)
-  // {
-  //   for (u = 0; u < 8; ++u)
-  //   {
-  //     *result += abs(block2[v*stride+u] - block1[v*stride+u]);
-  //   }
-  // }
+  *result = 0;
 
-  int difference = abs(block2[v * stride + u] - block1[v * stride + u]);
-  atomicAdd(result, difference);
-
-  __syncthreads();
+  for (v = 0; v < 8; ++v)
+  {
+    for (u = 0; u < 8; ++u)
+    {
+      *result += abs(block2[v*stride+u] - block1[v*stride+u]);
+    }
+  }
 }
 
 /* Motion estimation for 8x8 block */
@@ -51,72 +48,63 @@ __global__ static void me_block_8x8(struct c63_common *cm, struct macroblock *mb
   /* Quarter resolution for chroma channels. */
   if (color_component > 0) { range /= 2; }
 
-
-  int left = mb_x * 8 - range;
-  int top = mb_y * 8 - range;
-  int right = mb_x * 8 + range;
-  int bottom = mb_y * 8 + range;
-
   int w = cm->padw[color_component];
   int h = cm->padh[color_component];
 
-  /* Make sure we are within bounds of reference frame. TODO: Support partial
-     frame bounds. */
-  if (left < 0) { left = 0; }
-  if (top < 0) { top = 0; }
-  if (right > (w - 8)) { right = w - 8; }
-  if (bottom > (h - 8)) { bottom = h - 8; }
+  int x = mb_x * 8 + threadIdx.x - range;
+  int y = mb_y * 8 + threadIdx.y - range;
 
-  int x = 5, y = 5;
-
+  // Store all SADs in a flat array such that we can find the minimun SAD later
+  extern __shared__ struct mv_data sad_array[];
+  
+  int flattenedThreadIdx = threadIdx.y * blockDim.x + threadIdx.x;
+  
   int mx = mb_x * 8;
   int my = mb_y * 8;
+  int sad;
 
-  int best_sad = INT_MAX;
-  __shared__ int sad;
+  sad_array[flattenedThreadIdx].mv_x = x - mx;
+  sad_array[flattenedThreadIdx].mv_y = y - my;
 
-        // printf("%d, %d, %d, %d \n", x, y, *(orig+y*w+x));
-  // printf("%d, %d, %d, %d \n", *(orig), y, w, x);
+  if (x < 0 || y < 0 || x > w - 8 || y > h - 8) {
+    sad_array[flattenedThreadIdx].sad = INT_MAX;
+  } else {
+    sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad);
 
-  for (y = top; y < bottom; ++y)
+    // Store the SAD for this thread in the appropriate index in the array
+    sad_array[flattenedThreadIdx].sad = sad;
+  }
+
+  __syncthreads();
+
+  // Sequential addressing minimum algorithm
+  for(int stride = (blockDim.x*blockDim.y)/2; stride > 1; stride /= 2)
   {
-    for (x = left; x < right; ++x)
+    // Gives out way too high values
+    // Each iteration the amount of threads working will be halved since we compare 2 elements each iteration
+    if(flattenedThreadIdx < stride)
     {
-      sad = 0;
-      
-      __syncthreads();
-
-      sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad, threadIdx.x, threadIdx.y);
-
-      __syncthreads();
-
-      if (sad < best_sad)
+      if(sad_array[flattenedThreadIdx].sad > sad_array[flattenedThreadIdx + stride].sad)
       {
-        mb->mv_x = x - mx;
-        mb->mv_y = y - my;
-        best_sad = sad;
+        sad_array[flattenedThreadIdx] = sad_array[flattenedThreadIdx + stride];
+        // printf("sad_array[%d] = %d\n", flattenedThreadIdx, sad_array[flattenedThreadIdx])
       }
     }
+
+    __syncthreads();
   }
-  // if (threadIdx.x == 0 && threadIdx.y == 0) {
-  //   printf("(%4d, %4d) - %d - %d - %d\n", mx, my, best_sad, mb->mv_x, mb->mv_y);
-  // }
 
-
-  /* Here, there should be a threshold on SAD that checks if the motion vector
-     is cheaper than intraprediction. We always assume MV to be beneficial */
-
-  /* printf("Using motion vector (%d, %d) with SAD %d\n", mb->mv_x, mb->mv_y,
-     best_sad); */
-
-  mb->use_mv = 1;
+  if (threadIdx.x == 0 && threadIdx.y == 0)
+  {
+    mb->mv_x = sad_array[0].mv_x;
+    mb->mv_y = sad_array[0].mv_y;
+    mb->use_mv = 1;
+  }
 }
 
 void c63_motion_estimate(struct c63_common *cm)
 {
   /* Compare this frame with previous reconstructed frame */
-  int mb_x, mb_y;
-
   struct c63_common *cm_gpu;
   struct macroblock *mb_Y, *mb_U, *mb_V;
 
@@ -152,16 +140,18 @@ void c63_motion_estimate(struct c63_common *cm)
   cudaMemcpy(recons_U, cm->curframe->recons->U, sizeof(uint8_t)*cm->upw*cm->uph, cudaMemcpyHostToDevice);
   cudaMemcpy(recons_V, cm->curframe->recons->V, sizeof(uint8_t)*cm->vpw*cm->vph, cudaMemcpyHostToDevice);
 
-  dim3 gridDim(cm->mb_cols, cm->mb_rows);
-  dim3 blockDim(8, 8);
+  dim3 lumaThreadsPerBlock(cm->me_search_range*2, cm->me_search_range*2);
+  dim3 lumaGridDim(cm->mb_cols ,cm->mb_rows);
 
   /* Luma */
-  me_block_8x8<<<gridDim, blockDim>>>(cm_gpu, mb_Y, orig_Y, recons_Y, Y_COMPONENT);
+  me_block_8x8<<<lumaGridDim, lumaThreadsPerBlock, lumaThreadsPerBlock.x*lumaThreadsPerBlock.y*sizeof(int)*3>>>(cm_gpu, mb_Y, orig_Y, recons_Y, Y_COMPONENT);
+
+  dim3 chromaThreadsPerBlock(cm->me_search_range, cm->me_search_range);
+  dim3 chromaGridDim(cm->mb_cols/2, cm->mb_rows/2);
 
   /* Chroma */
-  me_block_8x8<<<gridDim, blockDim>>>(cm_gpu, mb_U, orig_U, recons_U, U_COMPONENT);
-
-  me_block_8x8<<<gridDim, blockDim>>>(cm_gpu, mb_V, orig_V, recons_V, V_COMPONENT);
+  me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)*3>>>(cm_gpu, mb_U, orig_U, recons_U, U_COMPONENT);
+  me_block_8x8<<<chromaGridDim, chromaThreadsPerBlock, chromaThreadsPerBlock.x*chromaThreadsPerBlock.y*sizeof(int)*3>>>(cm_gpu, mb_V, orig_V, recons_V, V_COMPONENT);
 
   cudaDeviceSynchronize();
 

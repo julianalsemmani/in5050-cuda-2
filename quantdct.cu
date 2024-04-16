@@ -351,29 +351,29 @@ void dequantize_idct(int16_t *in_data, uint8_t *prediction, uint32_t width,
   }
 }
 
-void dct_quantize(uint8_t *in_data, uint8_t *prediction, uint32_t width, uint32_t height, int16_t *out_data, uint8_t *quantization)
+void dct_quantize(uint8_t *in_data, uint8_t *prediction, uint32_t width, uint32_t height, int imgWidth, int imgHeight, int16_t *out_data, uint8_t *quantization)
 {
   int y;
   uint8_t *quantization_d;
   // , *in_data_d, *prediction_d;
   int16_t *out_data_d;
 
-  cudaMalloc((void **)&quantization_d, sizeof(uint8_t)*width*height);
+  cudaMalloc((void **)&quantization_d, sizeof(uint8_t)*imgWidth*imgHeight);
   // cudaMalloc((void **)&in_data_d, sizeof(uint8_t)*width*height);
   // cudaMalloc((void **)&prediction_d, sizeof(uint8_t)*width*height);
-  cudaMalloc((void **)&out_data_d, sizeof(int16_t)*width*height);
+  cudaMalloc((void **)&out_data_d, sizeof(int16_t)*imgWidth*imgHeight);
 
-  cudaMemcpy(quantization_d, quantization, sizeof(uint8_t)*width*height, cudaMemcpyHostToDevice);
+  cudaMemcpy(quantization_d, quantization, sizeof(uint8_t)*imgWidth*imgHeight, cudaMemcpyHostToDevice);
   // cudaMemcpy(in_data_d, in_data, sizeof(uint8_t)*width*height, cudaMemcpyHostToDevice);
   // cudaMemcpy(prediction_d, prediction, sizeof(uint8_t)*width*height, cudaMemcpyHostToDevice);
-  cudaMemcpy(out_data_d, out_data, sizeof(int16_t)*width*height, cudaMemcpyHostToDevice);
+  cudaMemcpy(out_data_d, out_data, sizeof(int16_t)*imgWidth*imgHeight, cudaMemcpyHostToDevice);
 
   for (y = 0; y < height; y += 8)
   {
     dct_quantize_row(in_data+y*width, prediction+y*width, width, height, out_data_d+y*width, quantization_d);
   }
 
-  cudaMemcpy(out_data, out_data_d, sizeof(int16_t)*width*height, cudaMemcpyDeviceToHost);
+  cudaMemcpy(out_data, out_data_d, sizeof(int16_t)*imgWidth*imgHeight, cudaMemcpyDeviceToHost);
 
   cudaFree(quantization_d);
   cudaFree(out_data_d);
